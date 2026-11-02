@@ -30,7 +30,12 @@ def main():
         parser.add_argument("--output", type=str, default="output", help="Directory for output files")
 
         args = parser.parse_args()
-        file_path = Path(args.file)
+        file_path = Path(args.file).expanduser().resolve()
+        if not file_path.exists():
+            parser.error(f"Input file does not exist: {file_path}")
+
+        if not file_path.is_file():
+            parser.error(f"Input path is not a file: {file_path}")
 
         logger.info(f"CLI invoked for file: {file_path}")
 

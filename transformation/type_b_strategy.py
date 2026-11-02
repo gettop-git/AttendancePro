@@ -1,149 +1,433 @@
-from datetime import datetime, timedelta
-from typing import List
-import random
+
+import calendar
 import logging
+import random
+from datetime import date, datetime, timedelta
+from typing import Any, Dict, List, Tuple
+
 from domain.models import AttendanceReport, AttendanceRow, ReportSummary
-from domain.exceptions import TransformationStrategyError, InvalidReportDataError
 from transformation.base_strategy import BaseTransformationStrategy
 
-# Logger setup for the Type B transformation strategy module
 logger = logging.getLogger(__name__)
 
 
 class TypeBTransformationStrategy(BaseTransformationStrategy):
-    """
-    Transformation strategy for Type B reports.
-    Applies deep and dynamic randomization across all report fields (including employee cards,
-    hourly rates, work hours, days off, and notes) to ensure unique and varied outputs on every execution.
-    """
+
+    DEFAULT_SETTINGS = {
+        "min_working_days": 10,
+        "max_working_days": 22,
+        "start_tolerance_minutes": 15,
+        "end_tolerance_minutes": 30,
+        "duration_tolerance_minutes": 30,
+        "time_interval_minutes": 15,
+        "year_range": 3,
+        "default_hourly_rate": 30.65,
+        "hourly_rate_variation_percent": 10,
+        "vacation_probability": 0.15,
+    }
 
     def transform(self, report: AttendanceReport) -> AttendanceReport:
-        """
-        Transforms a Type B attendance report with structured logging and error handling,
-        applying wide-ranging dynamic randomization across days, rows, wages, and cards.
-        """
-        try:
-            logger.info(
-                f"Starting Type B transformation for report type: {report.report_type} with employee card: {getattr(report, 'employee_card', 'N/A')}")
+        if report is None or not report.rows:
+            raise ValueError("Cannot transform an empty report.")
 
-            # Validate input report object integrity
-            if report is None:
-                raise InvalidReportDataError("Report object is None for Type B transformation.")
+        self.source_report = report
+        self.settings = self._get_settings()
 
-            # Initialize random generator without a fixed seed to guarantee full variability on every run
-            rng = random.Random()
+        self.constraints = self._analyze_constraints(report)
 
-            # Randomly choose a year and month for complete structural variation
-            year = rng.choice([2022, 2023, 2024])
-            month = rng.randint(1, 12)
+        year, month = self._generate_period(report)
 
-            # Calculate the number of days in the randomly selected month
-            if month in [1, 3, 5, 7, 8, 10, 12]:
-                days_in_month = 31
-            elif month in [4, 6, 9, 11]:
-                days_in_month = 30
-            else:
-                days_in_month = 29 if (year % 4 == 0 and (year % 100 != 0 or year % 400 == 0)) else 28
+        rows = self._generate_rows(year, month)
 
-            new_rows: List[AttendanceRow] = []
-            total_working_days = 0
-            total_monthly_hours = 0.0
+        summary = self._generate_summary(rows, report)
 
-            # Generate rows for each day of the randomized month
-            for day in range(1, days_in_month + 1):
-                current_date_obj = datetime(year, month, day)
-                date_str = f"{day}/{month}/{str(year)[-2:]}"
-                day_of_week = current_date_obj.strftime("%A")
+        result = AttendanceReport(
+            report_type=report.report_type,
+            rows=rows,
+            summary=summary,
+            employee_card=self._generate_employee_card(),
+            title=f"Employee Timesheet - {calendar.month_name[month]} {year}"
+        )
 
-                is_saturday = (day_of_week == "Saturday")
+        self._validate_result(result, year, month)
 
-                if is_saturday:
-                    clock_in = None
-                    clock_out = None
-                    net_hours = 0.0
-                    is_missing = True
-                    notes = ""
-                else:
-                    # Dynamic randomized chance for days off or leaves
-                    if rng.random() < 0.12 and day > 2:
-                        clock_in = None
-                        clock_out = None
-                        net_hours = 0.0
-                        is_missing = True
-                        notes = rng.choice(["Day off", "Sick leave", "Vacation", ""])
-                    else:
-                        total_working_days += 1
+        return result
 
-                        # Variable and diverse morning clock-in times
-                        in_hour = rng.choice([7, 8, 9, 10])
-                        in_minute = rng.choice([0, 10, 15, 20, 30, 45])
-                        clock_in = f"{in_hour:02d}:{in_minute:02d}"
+    def _get_settings(self) -> Dict[str, Any]:
+        if hasattr(self.config, "get_section"):
+            configured = self.config.get_section("synthetic_data")
+        elif isinstance(self.config, dict):
+            configured = self.config.get("synthetic_data", {})
+        else:
+            configured = {}
 
-                        # Broad variation of shift lengths (short to long shifts)
-                        shift_hours = rng.choice([3.5, 4.0, 5.5, 6.0, 7.5, 8.0, 8.5, 9.0, 9.5])
+        settings = self.DEFAULT_SETTINGS.copy()
+        settings.update(configured or {})
 
-                        in_dt = datetime.strptime(clock_in, "%H:%M")
-                        out_dt = in_dt + timedelta(minutes=int(shift_hours * 60))
-                        clock_out = out_dt.strftime("%H:%M")
+        return settings
 
-                        net_hours = shift_hours
-                        is_missing = False
-                        notes = rng.choice(["", "", "Field work", "Office", "Client meeting", "Remote", "Project work"])
+    def _analyze_constraints(self, report: AttendanceReport) -> Dict[str, Any]:
+        valid_rows = [
+            row for row in report.rows
+            if row.clock_in and row.clock_out
+        ]
 
-                total_monthly_hours += net_hours
+        if not valid_rows:
+            raise ValueError(
+                "Cannot generate Type B report: "
+                "source report has no valid working hours."
+            )
 
-                # Append generated attendance row to the list
-                new_rows.append(AttendanceRow(
-                    date=date_str,
-                    day_of_week=day_of_week,
+        starts = []
+        ends = []
+        durations = []
+
+        for row in valid_rows:
+            start = self._time_to_minutes(row.clock_in)
+            end = self._time_to_minutes(row.clock_out)
+
+            if end <= start:
+                continue
+
+            starts.append(start)
+            ends.append(end)
+            durations.append(end - start)
+
+        if not starts:
+            raise ValueError("No valid shifts found in source report.")
+
+        tolerance_start = self.settings["start_tolerance_minutes"]
+        tolerance_end = self.settings["end_tolerance_minutes"]
+        tolerance_duration = self.settings["duration_tolerance_minutes"]
+
+        return {
+            "min_start": max(0, min(starts) - tolerance_start),
+            "max_start": min(1439, max(starts) + tolerance_start),
+            "min_end": max(1, min(ends) - tolerance_end),
+            "max_end": min(1440, max(ends) + tolerance_end),
+            "min_duration": max(1, min(durations) - tolerance_duration),
+            "max_duration": max(durations) + tolerance_duration,
+        }
+
+    def _generate_period(self, report: AttendanceReport) -> Tuple[int, int]:
+        current_year = datetime.now().year
+        year_range = self.settings["year_range"]
+
+        source_period = self._get_source_period(report)
+
+        possible_periods = []
+
+        for year in range(current_year, current_year + year_range + 1):
+            for month in range(1, 13):
+                if source_period == (year, month):
+                    continue
+
+                possible_periods.append((year, month))
+
+        if not possible_periods:
+            raise ValueError("Could not generate a new reporting period.")
+
+        return random.choice(possible_periods)
+
+    def _get_source_period(self, report: AttendanceReport):
+        if report.title:
+            import re
+
+            match = re.search(
+                r"(January|February|March|April|May|June|July|"
+                r"August|September|October|November|December)\s+(\d{4})",
+                report.title,
+                re.IGNORECASE
+            )
+
+            if match:
+                month_number = list(calendar.month_name).index(
+                    match.group(1).capitalize()
+                )
+                return int(match.group(2)), month_number
+
+        for row in report.rows:
+            if row.date:
+                try:
+                    parsed = self._parse_date(row.date)
+                    return parsed.year, parsed.month
+                except ValueError:
+                    continue
+
+        return None
+
+    def _generate_rows(self, year: int, month: int) -> List[AttendanceRow]:
+        days_in_month = calendar.monthrange(year, month)[1]
+
+        # All days except Saturdays can potentially be working days.
+        possible_working_days = [
+            day
+            for day in range(1, days_in_month + 1)
+            if date(year, month, day).weekday() != 5
+        ]
+
+        # Choose only 3 or 4 additional vacation days.
+        vacation_days_count = min(
+            random.randint(3, 4),
+            max(0, len(possible_working_days) - 1)
+        )
+
+        vacation_days = set(
+            random.sample(possible_working_days, vacation_days_count)
+        )
+
+        rows = []
+
+        for day in range(1, days_in_month + 1):
+            current_date = date(year, month, day)
+
+            date_string = current_date.strftime("%d/%m/%y")
+            weekday_string = current_date.strftime("%A")
+
+            # Saturday is always a day off.
+            if current_date.weekday() == 5:
+                rows.append(
+                    self._create_day_off_row(
+                        date_string,
+                        weekday_string
+                    )
+                )
+                continue
+
+            # Only 3-4 additional days off.
+            if day in vacation_days:
+                rows.append(
+                    self._create_day_off_row(
+                        date_string,
+                        weekday_string
+                    )
+                )
+                continue
+
+            # Generate a working day.
+            clock_in, clock_out, total_hours = self._generate_shift()
+
+            rows.append(
+                AttendanceRow(
+                    date=date_string,
+                    day_of_week=weekday_string,
                     clock_in=clock_in,
                     clock_out=clock_out,
-                    total_hours=round(net_hours, 2),
-                    notes=notes,
-                    is_missing_punch=is_missing,
+                    total_hours=total_hours,
+                    notes=None,
+                    is_missing_punch=False,
                     is_overtime_hazard=False
-                ))
-
-            # --- Deep and full variation on wages, rates, and employee cards ---
-
-            # 1. Wide and true variation on the hourly rate (changes significantly on every run)
-            base_rate = report.summary.hourly_rate if (
-                        report.summary and report.summary.hourly_rate > 0) else self.config.get("default_hourly_rate",
-                                                                                                30.65)
-            rate_variation = rng.uniform(-4.0, 12.0)
-            hourly_rate = round(max(28.0, base_rate + rate_variation), 2)
-
-            total_payment = round(total_monthly_hours * hourly_rate, 2)
-
-            new_summary = ReportSummary(
-                total_working_days=total_working_days,
-                total_monthly_hours=round(total_monthly_hours, 2),
-                hourly_rate=hourly_rate,
-                total_payment=total_payment
+                )
             )
 
-            # 2. True dynamic variation on the employee card (randomized dynamically on every run)
-            original_card = report.employee_card if report.employee_card else self.config.get("default_employee_card",
-                                                                                              "22-090")
-            card_digits = "".join(filter(str.isdigit, original_card))
-            if card_digits:
-                base_num = int(card_digits)
-                new_card_num = base_num + rng.randint(-15, 35)
-                dynamic_card = f"{abs(new_card_num):02d}-{rng.randint(10, 99)}"
-            else:
-                dynamic_card = f"{rng.randint(10, 40)}-{rng.randint(100, 999)}"
+        return rows
 
-            logger.info("Type B transformation completed successfully.")
-            return AttendanceReport(
-                report_type=report.report_type,
-                rows=new_rows,
-                summary=new_summary,
-                employee_card=dynamic_card
+    def _create_day_off_row(
+        self,
+        date_string: str,
+        weekday_string: str
+    ) -> AttendanceRow:
+        return AttendanceRow(
+            date=date_string,
+            day_of_week=weekday_string,
+            clock_in="-",
+            clock_out="-",
+            total_hours=0.0,
+            notes=None,
+            is_missing_punch=False,
+            is_overtime_hazard=False
+        )
+
+    def _generate_shift(self) -> Tuple[str, str, float]:
+        interval = self.settings["time_interval_minutes"]
+
+        min_start = self.constraints["min_start"]
+        max_start = self.constraints["max_start"]
+
+        min_end = self.constraints["min_end"]
+        max_end = self.constraints["max_end"]
+
+        min_duration = self.constraints["min_duration"]
+        max_duration = self.constraints["max_duration"]
+
+        possible_shifts = []
+
+        first_start = (
+            (min_start + interval - 1) // interval
+        ) * interval
+
+        last_start = (max_start // interval) * interval
+
+        for start in range(first_start, last_start + 1, interval):
+            for duration in range(
+                ((min_duration + interval - 1) // interval) * interval,
+                (max_duration // interval) * interval + 1,
+                interval
+            ):
+                end = start + duration
+
+                if min_end <= end <= max_end and end <= 1440:
+                    possible_shifts.append((start, end))
+
+        if not possible_shifts:
+            raise ValueError(
+                "No valid shifts can be generated from source constraints."
             )
 
-        except InvalidReportDataError as jde:
-            logger.warning(f"Validation warning in Type B transformation: {jde}")
-            raise
-        except Exception as e:
-            logger.error(f"Unexpected error during Type B transformation: {e}", exc_info=True)
-            raise TransformationStrategyError(f"Type B transformation failed: {e}") from e
+        start, end = random.choice(possible_shifts)
+
+        clock_in = self._minutes_to_time(start)
+        clock_out = self._minutes_to_time(end)
+
+        total_hours = round((end - start) / 60, 2)
+
+        return clock_in, clock_out, total_hours
+
+    def _generate_summary(
+        self,
+        rows: List[AttendanceRow],
+        source_report: AttendanceReport
+    ) -> ReportSummary:
+
+        working_rows = [
+            row for row in rows
+            if row.clock_in not in (None, "-")
+            and row.clock_out not in (None, "-")
+        ]
+
+        total_working_days = len(working_rows)
+
+        total_monthly_hours = round(
+            sum(row.total_hours for row in working_rows),
+            2
+        )
+
+        source_rate = 0.0
+
+        if source_report.summary:
+            source_rate = source_report.summary.hourly_rate
+
+        if source_rate <= 0:
+            source_rate = self.settings["default_hourly_rate"]
+
+        variation = self.settings["hourly_rate_variation_percent"] / 100
+
+        hourly_rate = round(
+            source_rate * random.uniform(1 - variation, 1 + variation),
+            2
+        )
+
+        total_payment = round(
+            total_monthly_hours * hourly_rate,
+            2
+        )
+
+        return ReportSummary(
+            total_working_days=total_working_days,
+            total_monthly_hours=total_monthly_hours,
+            hourly_rate=hourly_rate,
+            total_payment=total_payment
+        )
+
+    def _generate_employee_card(self) -> str:
+        return f"{random.randint(10, 99)}-{random.randint(0, 999):03d}"
+
+    def _validate_result(
+        self,
+        report: AttendanceReport,
+        year: int,
+        month: int
+    ) -> None:
+
+        expected_days = calendar.monthrange(year, month)[1]
+
+        if len(report.rows) != expected_days:
+            raise ValueError(
+                "Generated report does not contain all days of the month."
+            )
+
+        seen_dates = set()
+        working_days = 0
+        total_hours = 0.0
+
+        interval = self.settings["time_interval_minutes"]
+
+        for row in report.rows:
+            parsed_date = self._parse_date(row.date)
+
+            if parsed_date.year != year or parsed_date.month != month:
+                raise ValueError("Generated row has an incorrect date.")
+
+            if parsed_date in seen_dates:
+                raise ValueError("Duplicate date found.")
+
+            seen_dates.add(parsed_date)
+
+            if row.day_of_week != parsed_date.strftime("%A"):
+                raise ValueError("Incorrect weekday.")
+
+            if parsed_date.weekday() == 5:
+                if row.clock_in != "-" or row.clock_out != "-":
+                    raise ValueError("Saturday must be a day off.")
+
+            is_day_off = row.clock_in == "-" and row.clock_out == "-"
+
+            if is_day_off:
+                if row.total_hours != 0:
+                    raise ValueError("Day off must have zero working hours.")
+                continue
+
+            if not row.clock_in or not row.clock_out:
+                raise ValueError("Working day has missing punch.")
+
+            start = self._time_to_minutes(row.clock_in)
+            end = self._time_to_minutes(row.clock_out)
+
+            if start % interval != 0 or end % interval != 0:
+                raise ValueError("Generated time does not match interval.")
+
+            if end <= start:
+                raise ValueError("Clock out must be after clock in.")
+
+            calculated_hours = round((end - start) / 60, 2)
+
+            if abs(calculated_hours - row.total_hours) > 0.01:
+                raise ValueError("Incorrect total hours in row.")
+
+            working_days += 1
+            total_hours += row.total_hours
+
+        if working_days != report.summary.total_working_days:
+            raise ValueError("Working days summary does not match rows.")
+
+        if round(total_hours, 2) != report.summary.total_monthly_hours:
+            raise ValueError("Monthly hours summary does not match rows.")
+
+        expected_payment = round(
+            report.summary.total_monthly_hours *
+            report.summary.hourly_rate,
+            2
+        )
+
+        if abs(expected_payment - report.summary.total_payment) > 0.01:
+            raise ValueError("Incorrect total payment.")
+
+    @staticmethod
+    def _parse_date(value: str) -> date:
+        for fmt in ("%d/%m/%y", "%d/%m/%Y", "%Y-%m-%d"):
+            try:
+                return datetime.strptime(value, fmt).date()
+            except ValueError:
+                continue
+
+        raise ValueError(f"Unsupported date format: {value}")
+
+    @staticmethod
+    def _time_to_minutes(value: str) -> int:
+        parsed = datetime.strptime(value, "%H:%M")
+        return parsed.hour * 60 + parsed.minute
+
+    @staticmethod
+    def _minutes_to_time(value: int) -> str:
+        hours, minutes = divmod(value, 60)
+        return f"{hours:02d}:{minutes:02d}"

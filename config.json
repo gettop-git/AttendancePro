@@ -1,5 +1,12 @@
 {
-  "default_hourly_rate": 30.65,
-  "default_employee_card": "22-090",
-  "default_break_duration": "00:30"
+  "synthetic_data": {
+    "min_working_days": 10,
+    "max_working_days": 22,
+    "start_tolerance_minutes": 15,
+    "end_tolerance_minutes": 30,
+    "duration_tolerance_minutes": 30,
+    "break_tolerance_minutes": 0,
+    "default_break_duration": "00:30",
+    "year_range": 3
+  }
 }
