@@ -8,7 +8,7 @@ A Python-based automated system for parsing, transforming, and generating attend
 
 The input is a PDF attendance report. The system runs it through a four-step pipeline:
 
-1. **Classify** – `DocumentClassifier` reads the PDF (via OCR) and decides whether it is **Type A** (HaNesher, detailed columns and a bottom summary) or **Type B** (Employee timesheet, top summary and employee card).
+1. **Classify** – `DocumentClassifier` reads the text of the PDF and decides whether it is **Type A** (HaNesher, detailed columns and a bottom summary) or **Type B** (Employee timesheet, top summary and employee card).
 2. **Parse** – `ParserFactory` returns the right parser, which converts the raw text into an `AttendanceReport` object.
 3. **Transform** – `TransformationService` selects the matching strategy (Strategy Pattern) and produces a new, immutable `AttendanceReport`. Generation parameters are read from `config.json`.
 4. **Render** – the report is written as an **HTML** or **PDF** file.
@@ -16,6 +16,10 @@ The input is a PDF attendance report. The system runs it through a four-step pip
 ```
 PDF  ->  Classifier  ->  Parser  ->  Transformation  ->  Renderer  ->  HTML / PDF
 ```
+
+---
+
+**Where the text comes from.** `parsers/ocr.py` first reads the text stored inside the PDF (using `pdftotext` from Poppler). This is exact, and it is what the sample PDFs in `input_pdfs/` use. Only if the PDF has no usable text (for example a scanned document) does it fall back to OCR with Tesseract.
 
 ---
 
@@ -63,8 +67,8 @@ The `parsers`, `transformation` and `generators` packages depend only on `domain
 ### Prerequisites
 
 - Python 3.12 or newer
-- [Tesseract OCR](https://github.com/tesseract-ocr/tesseract) installed and available on your `PATH`
-- [Poppler](https://poppler.freedesktop.org/) installed and available on your `PATH` (required by `pdf2image`)
+- [Poppler](https://poppler.freedesktop.org/) installed and available on your `PATH` (provides `pdftotext` and is required by `pdf2image`)
+- [Tesseract OCR](https://github.com/tesseract-ocr/tesseract) installed and available on your `PATH` (needed only for scanned PDFs without embedded text)
 
 ### Setup
 
@@ -138,12 +142,14 @@ If the file is missing or invalid, built-in defaults are used.
 pytest -v
 ```
 
-The tests need no real PDFs and no Tesseract: the OCR text is replaced with sample text (`tests/sample_data.py`).
+Most tests need no real PDFs and no Tesseract: the text is replaced with sample text (`tests/sample_data.py`). The tests in `test_sample_pdfs.py` run the real PDFs from `input_pdfs/` and are skipped automatically if `pdftotext` is not installed.
 
 | File | What it covers |
 |------|----------------|
 | `tests/test_classifier.py` | `DocumentClassifier`: Type A, Type B, a file that is not a report (clear error), empty text, missing file |
 | `tests/test_parsers.py` | `TypeAParser`, `TypeBParser` and `ParserFactory`: rows, summary, employee card, missing or unreadable summary values (errors), text without rows, missing file |
+| `tests/test_ocr.py` | Text extraction: embedded text is used when present, OCR is the fallback, a missing tool or file is handled |
+| `tests/test_sample_pdfs.py` | The real sample PDFs: classification, parsing with summary, and the whole pipeline |
 | `tests/test_attendance.py` | Both transformation strategies and `TransformationService`: standard flow, summary consistency, employee card, hourly rate rules, unusual inputs, errors, strategy selection and injection |
 
 ---
@@ -196,7 +202,8 @@ docker run --rm -it -v "$(pwd)/input_pdfs:/app/input_pdfs" -v "$(pwd)/output:/ap
 
 | Problem | Solution |
 |---------|----------|
-| `TesseractNotFoundError` | Install Tesseract and make sure it is on your `PATH`. |
+| `TesseractNotFoundError` | The PDF has no embedded text, so OCR is needed. Install Tesseract and make sure it is on your `PATH`. |
+| `Could not read embedded text with pdftotext` (with `--verbose`) | Install Poppler and add its `bin` folder to your `PATH`. |
 | `PDFInfoNotInstalledError` | Install Poppler and make sure it is on your `PATH`. |
 | An error message you do not understand | Run again with `--verbose` to see the full details. |
 | `Input path is not an existing file` | Check the file name and wrap paths with spaces in quotes. |

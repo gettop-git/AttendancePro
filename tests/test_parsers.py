@@ -4,7 +4,7 @@ from domain.exceptions import InvalidReportDataError
 from parsers.factory import ParserFactory
 from parsers.type_a_parser import TypeAParser
 from parsers.type_b_parser import TypeBParser
-from tests.sample_data import TYPE_A_TEXT, TYPE_B_TEXT
+from tests.sample_data import TYPE_A_TEXT, TYPE_B_HEADER_ROW, TYPE_B_TEXT, TYPE_B_VALUE_ROW
 
 
 def _pdf(tmp_path):
@@ -55,18 +55,18 @@ def test_type_b_parses_summary(tmp_path):
     assert summary.total_working_days == 21
     assert summary.total_monthly_hours == 180.5
     assert summary.hourly_rate == 30.65
-    assert summary.total_payment == 5531.33
+    assert summary.total_payment == 5532.33
 
 
 def test_type_b_unreadable_summary_value_raises(tmp_path):
-    bad_text = TYPE_B_TEXT.replace("\n21\n", "\nabc\n")
-    with pytest.raises(InvalidReportDataError, match="total working days"):
+    bad_text = TYPE_B_TEXT.replace(TYPE_B_VALUE_ROW, "          abc                    180.50               ■30.65          ■5,532.33")
+    with pytest.raises(InvalidReportDataError, match="summary values"):
         TypeBParser(ocr_extractor=lambda p: bad_text).parse(_pdf(tmp_path))
 
 
-def test_type_b_missing_summary_value_raises(tmp_path):
-    bad_text = TYPE_B_TEXT.replace("Total Payment\n5531.33\n", "")
-    with pytest.raises(InvalidReportDataError, match="total payment"):
+def test_type_b_missing_summary_table_raises(tmp_path):
+    bad_text = TYPE_B_TEXT.replace(TYPE_B_HEADER_ROW, "")
+    with pytest.raises(InvalidReportDataError, match="summary table"):
         TypeBParser(ocr_extractor=lambda p: bad_text).parse(_pdf(tmp_path))
 
 

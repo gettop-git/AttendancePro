@@ -9,20 +9,22 @@ Date Day of Week Location Clock In Clock Out Break Total Hours 100% 125% 150% Sa
 Total Days: 3 | Total Hours: 21.50 | 100% Hours: 16.50 | 125% Hours: 1.00 | 150% Hours: 0 | Bonus: 0 | Travel: 30
 """
 
-TYPE_B_TEXT = """Employee Timesheet - March 2023
-Employee Card: 22-090
-Total Working Days
-21
-Total Monthly Hours
-180.5
-Hourly Rate
-30.65
-Total Payment
-5531.33
-Date Day of Week Clock In Clock Out Total Hours
-05/03/23 Sunday 08:00 17:00 8.50
-06/03/23 Monday 08:00 17:00 8.50
-11/03/23 Saturday - - -
+# Type B text in the same layout as the real PDFs: a header row with the four column
+# names, then one row with the four values (the "■" is the currency sign).
+TYPE_B_HEADER_ROW = "   Total Working Days     Total Monthly Hours     Hourly Rate     Total Payment"
+TYPE_B_VALUE_ROW = "          21                     180.50               ■30.65          ■5,532.33"
+
+TYPE_B_TEXT = f"""                     Employee Timesheet - March 2023
+                              Employee Card: 22-090
+
+{TYPE_B_HEADER_ROW}
+
+{TYPE_B_VALUE_ROW}
+
+ Date          Day of Week      Clock In     Clock Out     Total Hours     Notes
+05/03/23       Sunday           08:00        17:00         8.50
+06/03/23       Monday           08:00        17:00         8.50
+11/03/23       Saturday         -            -             -
 """
 
 NOT_A_REPORT_TEXT = "Pizza recipe: flour, water, yeast. Bake for 20 minutes."

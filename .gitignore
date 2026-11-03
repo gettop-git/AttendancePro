@@ -16,5 +16,4 @@ venv/
 .vscode/
 
 # Project data
-input_pdfs/
 output/

@@ -1,93 +1,92 @@
-import json
+import argparse
 import logging
 from pathlib import Path
-from typing import Any
+
+from main import build_report, get_renderer, setup_logging
+from domain.exceptions import AttendanceSystemError, InvalidReportDataError
 
 logger = logging.getLogger(__name__)
 
+COMPANY_PREFIXES = {"Type A": "HaNesher", "Type B": "Employee"}
 
-# Single source of defaults. config.json overrides any of these values.
-DEFAULT_CONFIG = {
-    "synthetic_data": {
-        "enabled": True,
-        # Working days and period
-        "min_working_days": 10,
-        "max_working_days": 22,
-        "year_range": 3,
-        # Shift generation
-        "start_tolerance_minutes": 15,
-        "end_tolerance_minutes": 30,
-        "duration_tolerance_minutes": 30,
-        "break_tolerance_minutes": 0,
-        "default_break_duration": "00:30",
-        "time_interval_minutes": 15,
-        "max_generation_attempts": 500,
-        # Type B: pay variation and vacation days
-        "hourly_rate_variation_percent": 10,
-        "vacation_days_min": 3,
-        "vacation_days_max": 4,
-        # Validation
-        "rounding_tolerance": 0.01,
-    }
+MONTHS = {
+    1: "January", 2: "February", 3: "March", 4: "April",
+    5: "May", 6: "June", 7: "July", 8: "August",
+    9: "September", 10: "October", 11: "November", 12: "December",
 }
 
 
-class ConfigManager:
-    """Loads, validates and provides access to system configuration."""
-
-    def __init__(self, config_path: str | None = None):
-        self.config_path = (
-            Path(config_path)
-            if config_path
-            else Path(__file__).resolve().parent / "config.json"
-        )
-
-        self._config_data = self._load_config()
-
-    def _load_config(self) -> dict[str, Any]:
-        if not self.config_path.exists():
-            logger.info("Configuration file not found. Using defaults.")
-            return DEFAULT_CONFIG.copy()
-
-        try:
-            with self.config_path.open("r", encoding="utf-8") as file:
-                loaded_config = json.load(file)
-
-            if not isinstance(loaded_config, dict):
-                raise ValueError("Configuration must be a JSON object.")
-
-            return self._merge_with_defaults(loaded_config)
-
-        except (json.JSONDecodeError, OSError, ValueError) as error:
-            logger.warning(
-                "Failed to load configuration: %s. Using defaults.",
-                error,
-            )
-            return DEFAULT_CONFIG.copy()
-
-    @staticmethod
-    def _merge_with_defaults(
-        loaded_config: dict[str, Any],
-    ) -> dict[str, Any]:
-        config = DEFAULT_CONFIG.copy()
-
-        for key, value in loaded_config.items():
-            if (
-                isinstance(value, dict)
-                and isinstance(config.get(key), dict)
-            ):
-                config[key] = {**config[key], **value}
-            else:
-                config[key] = value
-
-        return config
-
-    def get(self, key: str, default: Any = None) -> Any:
-        return self._config_data.get(key, default)
-
-    def get_section(self, section: str) -> dict[str, Any]:
-        value = self._config_data.get(section, {})
-        return value.copy() if isinstance(value, dict) else {}
+def month_and_year(report) -> tuple[str, str]:
+    """Extract month name and year from the first row's date (dd/mm/yy[yy]). No defaults."""
+    if not report.rows or not report.rows[0].date:
+        raise InvalidReportDataError("Cannot build a file name: the first row has no date.")
+    date_text = report.rows[0].date
+    try:
+        _, month_num, raw_year = date_text.split("/")
+        month = MONTHS[int(month_num)]
+    except (ValueError, KeyError) as err:
+        raise InvalidReportDataError(f"Cannot read month/year from the date {date_text!r}.") from err
+    year = "20" + raw_year if len(raw_year) == 2 else raw_year
+    return month, year
 
 
-config = ConfigManager()
+def build_filename(report) -> str:
+    """Build a name like HaNesher_July_2023_Card_22_090."""
+    prefix = COMPANY_PREFIXES.get(report.report_type)
+    if prefix is None:
+        raise InvalidReportDataError(f"Unknown report type: {report.report_type!r}")
+    if not report.employee_card:
+        raise InvalidReportDataError("Cannot build a file name: the report has no employee card number.")
+    month, year = month_and_year(report)
+    card = report.employee_card.replace("-", "_")
+    return f"{prefix}_{month}_{year}_Card_{card}"
+
+
+def ask_export_format() -> str:
+    print("\n--- Export Format Selection ---")
+    while True:
+        choice = input("Enter the desired export format [type html or pdf]: ").strip().lower()
+        if choice in ("html", "pdf"):
+            return choice
+        logger.warning(f"Invalid export choice: '{choice}'")
+        print("[WARNING] Invalid choice. Please type 'html' or 'pdf' only.")
+
+
+def parse_args():
+    parser = argparse.ArgumentParser(description="Interactive Attendance Report Processing CLI")
+    parser.add_argument("file", type=str, help="Path to the input PDF attendance report")
+    parser.add_argument("--output", type=str, default="output", help="Directory for output files")
+    parser.add_argument("--verbose", action="store_true", help="Show full error details (traceback) when something fails")
+    args = parser.parse_args()
+
+    file_path = Path(args.file).expanduser().resolve()
+    if not file_path.is_file():
+        parser.error(f"Input path is not an existing file: {file_path}")
+    return file_path, Path(args.output), args.verbose
+
+
+def main():
+    verbose = False
+    try:
+        file_path, output_dir, verbose = parse_args()
+        setup_logging(verbose)
+        output_dir.mkdir(exist_ok=True, parents=True)
+
+        report = build_report(str(file_path))
+
+        export_format = ask_export_format()
+        out_file = output_dir / f"{build_filename(report)}.{export_format}"
+
+        get_renderer(export_format == "pdf").render(report, str(out_file))
+        print(f"\n[SUCCESS] File successfully exported to: {out_file}")
+
+    except (AttendanceSystemError, InvalidReportDataError) as err:
+        logger.error(f"Business logic error: {err}", exc_info=verbose)
+        print(f"\n[ERROR] Business validation failed: {err}")
+    except Exception as err:
+        logger.error(f"Unexpected error: {err}", exc_info=verbose)
+        print(f"\n[ERROR] An unexpected error occurred: {err}")
+
+
+if __name__ == "__main__":
+    main()

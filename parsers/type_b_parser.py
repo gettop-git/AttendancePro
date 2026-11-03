@@ -106,40 +106,49 @@ class TypeBParser(BaseParser):
 
     def _parse_summary(self, lines: List[str]) -> Optional[ReportSummary]:
         """
-        Parses the top-summary fields of a Type B report.
+        Parses the summary table of a Type B report: a header line with the four
+        column names, followed by one line with the four values, e.g.
 
-        Every field is required. A missing or unreadable value raises
-        InvalidReportDataError: no defaults and no guessing.
+            Total Working Days   Total Monthly Hours   Hourly Rate   Total Payment
+                   20                  84.00             30.65         2,574.60
+
+        All four values are required. If the table is missing or a value cannot be
+        read, InvalidReportDataError is raised: no defaults and no guessing.
         """
-        fields = {
-            "total working days": ("total_working_days", int),
-            "total monthly hours": ("total_monthly_hours", float),
-            "hourly rate": ("hourly_rate", float),
-            "total payment": ("total_payment", float),
-        }
+        columns = [
+            ("total working days", "total_working_days", int),
+            ("total monthly hours", "total_monthly_hours", float),
+            ("hourly rate", "hourly_rate", float),
+            ("total payment", "total_payment", float),
+        ]
         try:
-            values = {}
             for idx, line in enumerate(lines):
                 line_lower = line.lower()
-                for label, (name, convert) in fields.items():
-                    if label not in line_lower or idx + 1 >= len(lines):
-                        continue
-                    raw_value = lines[idx + 1].strip()
-                    try:
-                        values[name] = convert(raw_value.replace("\u25a0", "").replace(",", ""))
-                    except ValueError:
-                        raise InvalidReportDataError(
-                            f"Could not read '{label}' from the value {raw_value!r}."
-                        ) from None
+                if not all(label in line_lower for label, _, _ in columns):
+                    continue
+                if idx + 1 >= len(lines):
+                    break
 
-            missing = [label for label, (name, _) in fields.items() if name not in values]
-            if missing:
-                raise InvalidReportDataError(
-                    f"Missing summary values in the report: {', '.join(missing)}."
-                )
+                value_line = lines[idx + 1].strip()
+                numbers = re.findall(r"\d[\d,]*(?:\.\d+)?", value_line)
+                if len(numbers) != len(columns):
+                    raise InvalidReportDataError(
+                        f"Could not read the 4 summary values from the line: {value_line!r}."
+                    )
 
-            logger.debug("Type B summary successfully parsed.")
-            return ReportSummary(**values)
+                # The columns appear left to right in the order of their names in the header.
+                ordered = sorted(columns, key=lambda column: line_lower.index(column[0]))
+                values = {}
+                for (label, name, convert), number in zip(ordered, numbers):
+                    values[name] = convert(number.replace(",", ""))
+
+                logger.debug("Type B summary successfully parsed.")
+                return ReportSummary(**values)
+
+            raise InvalidReportDataError(
+                "The summary table (Total Working Days / Total Monthly Hours / "
+                "Hourly Rate / Total Payment) was not found in the report."
+            )
         except InvalidReportDataError:
             raise
         except Exception as e:

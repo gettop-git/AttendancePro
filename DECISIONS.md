@@ -18,6 +18,7 @@ This file records the main design decisions of the Attendance Report System: wha
 | 12 | PDF is produced from the HTML |
 | 13 | Tests use sample text, not real PDFs |
 | 14 | Docker next to a local setup |
+| 15 | Read the PDF's own text first, OCR only as a fallback |
 
 ---
 
@@ -194,7 +195,9 @@ This file records the main design decisions of the Attendance Report System: wha
 
 **Why:** the tests are fast, run on any machine without Tesseract, and give the same result every time. They cover the classifier, the parsers and the transformation, including the error cases.
 
-**Trade-off:** the OCR itself is not tested. It should be checked manually on the real PDFs in `input_pdfs/`.
+**In addition:** `test_sample_pdfs.py` runs the real PDFs from `input_pdfs/` through the pipeline, so the sample files are covered too.
+
+**Trade-off:** the OCR step is tested only with fake page images. A scanned PDF should be checked manually.
 
 ---
 
@@ -207,3 +210,19 @@ This file records the main design decisions of the Attendance Report System: wha
 **Decision:** both. The image installs Python, the libraries, Tesseract and Poppler.
 
 **Why:** the project depends on two programs outside Python (Tesseract and Poppler). Docker lets anyone run it without installing them. `.dockerignore` and `.gitignore` keep local files (`.venv`, `.idea`) out of the image and the repository.
+
+---
+
+## 15. Read the PDF's own text first, OCR only as a fallback
+
+**Options**
+- OCR every PDF with Tesseract.
+- Read the text stored inside the PDF, and use OCR only when there is none.
+
+**Decision:** read the embedded text first (`pdftotext -layout`, part of Poppler), and fall back to OCR for PDFs with fewer than 20 words of embedded text.
+
+**Why:** OCR on the real sample files misread the Type B summary: the white-on-blue column names were not recognized, and the currency sign hid the first digit of the hourly rate (`30.65` was read as `0.65`). A wrong number that looks valid is worse than an error. The embedded text is exact, and `-layout` keeps each table row on one line, which is what the parsers expect.
+
+**Trade-off:** one more external program is used. Poppler is already required by `pdf2image`, so nothing new has to be installed. If `pdftotext` is missing, a warning is logged and OCR is used.
+
+**Related:** the Type B parser reads the summary as a table (a header line with the four column names and one line with the four values), because that is the layout of the real files.

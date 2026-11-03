@@ -1,11 +1,36 @@
 from pathlib import Path
 import logging
+import subprocess
 import pytesseract
 from pdf2image import convert_from_path
 from domain.exceptions import AttendanceSystemError
 
 # Logger setup for the OCR extraction module
 logger = logging.getLogger(__name__)
+
+# A PDF with at least this many words of embedded text is read directly (no OCR needed).
+MIN_EMBEDDED_WORDS = 20
+
+
+def _extract_embedded_text(pdf_path: Path) -> str:
+    """
+    Reads the text that is stored inside the PDF itself, keeping the table layout
+    (one table row per line). Uses `pdftotext` from Poppler, which is already
+    required by pdf2image. Returns "" if the tool is missing or fails.
+    """
+    try:
+        result = subprocess.run(
+            ["pdftotext", "-layout", str(pdf_path), "-"],
+            capture_output=True,
+            encoding="utf-8",
+            errors="replace",
+            timeout=60,
+            check=True,
+        )
+        return result.stdout
+    except (OSError, subprocess.SubprocessError) as e:
+        logger.warning(f"Could not read embedded text with pdftotext ({e}); falling back to OCR.")
+        return ""
 
 
 def extract_text_from_pdf(pdf_path: Path, lang: str = "eng") -> str:
@@ -25,6 +50,15 @@ def extract_text_from_pdf(pdf_path: Path, lang: str = "eng") -> str:
             error_msg = f"Target PDF file not found at: {pdf_path}"
             logger.error(error_msg)
             raise FileNotFoundError(error_msg)
+
+        # Prefer the text stored inside the PDF: it is exact, while OCR can misread
+        # white-on-color table headers and currency symbols. Scanned PDFs have no
+        # such text, so they fall through to OCR below.
+        embedded_text = _extract_embedded_text(pdf_path)
+        if len(embedded_text.split()) >= MIN_EMBEDDED_WORDS:
+            logger.info(f"Using the embedded text of: {pdf_path}")
+            return embedded_text
+        logger.info(f"No usable embedded text in {pdf_path}; using OCR.")
 
         # Convert PDF pages into memory images
         images = convert_from_path(pdf_path)
