@@ -1,4 +1,3 @@
-
 import calendar
 import logging
 import random
@@ -12,6 +11,7 @@ from domain.exceptions import (
     InvalidReportDataError,
 )
 from transformation.base_strategy import BaseTransformationStrategy
+from config import DEFAULT_CONFIG
 
 
 logger = logging.getLogger(__name__)
@@ -24,17 +24,6 @@ class TypeATransformationStrategy(BaseTransformationStrategy):
     Source data is used only to derive reasonable constraints.
     Generated dates, shifts and employee details are independent.
     """
-
-    DEFAULT_SETTINGS = {
-        "min_working_days": 10,
-        "max_working_days": 22,
-        "start_tolerance_minutes": 15,
-        "end_tolerance_minutes": 30,
-        "duration_tolerance_minutes": 30,
-        "break_tolerance_minutes": 0,
-        "default_break_duration": "00:30",
-        "year_range": 3,
-    }
 
     def transform(self, report: AttendanceReport) -> AttendanceReport:
         try:
@@ -80,7 +69,7 @@ class TypeATransformationStrategy(BaseTransformationStrategy):
                 title=f"Attendance Report - {month:02d}/{year}",
             )
 
-            self._validate_result(new_report)
+            self._validate_result(new_report, settings)
 
             logger.info(
                 "Type A transformation completed successfully. "
@@ -104,7 +93,7 @@ class TypeATransformationStrategy(BaseTransformationStrategy):
     # ---------------------------------------------------------
 
     def _get_settings(self) -> dict[str, Any]:
-        settings = self.DEFAULT_SETTINGS.copy()
+        settings = dict(DEFAULT_CONFIG["synthetic_data"])
 
         if hasattr(self.config, "get_section"):
             configured = self.config.get_section("synthetic_data")
@@ -278,7 +267,9 @@ class TypeATransformationStrategy(BaseTransformationStrategy):
                         source_month,
                     )
                 except ValueError:
-                    pass
+                    logger.warning(
+                        f"Could not read the source period from title: {report.title!r}"
+                    )
 
         possible_periods = [
             (year, month)
@@ -336,12 +327,12 @@ class TypeATransformationStrategy(BaseTransformationStrategy):
                 "Not enough eligible dates in the generated month."
             )
 
-        print(f"DEBUG - min_days: {min_days}")
-        print(f"DEBUG - max_days: {max_days}")
+        logger.debug(f"min_days: {min_days}")
+        logger.debug(f"max_days: {max_days}")
 
         working_days_count = rng.randint(min_days, max_days)
 
-        print(f"DEBUG - selected working days: {working_days_count}")
+        logger.debug(f"selected working days: {working_days_count}")
 
         selected_dates = sorted(
             rng.sample(eligible_dates, working_days_count)
@@ -353,6 +344,7 @@ class TypeATransformationStrategy(BaseTransformationStrategy):
             shift = self._generate_shift(
                 constraints,
                 rng,
+                settings,
             )
 
             net_hours = shift["total_hours"]
@@ -399,9 +391,11 @@ class TypeATransformationStrategy(BaseTransformationStrategy):
             self,
             constraints: dict[str, Any],
             rng: random.Random,
+            settings: dict[str, Any],
     ) -> dict[str, Any]:
 
-        interval = 15
+        interval = int(settings["time_interval_minutes"])
+        max_attempts = int(settings["max_generation_attempts"])
 
         min_start = (
                             (constraints["min_start"] + interval - 1)
@@ -432,20 +426,20 @@ class TypeATransformationStrategy(BaseTransformationStrategy):
 
         if min_start > max_start:
             raise InvalidReportDataError(
-                "No valid start times in 15-minute intervals."
+                f"No valid start times in {interval}-minute intervals."
             )
 
         if min_duration > max_duration:
             raise InvalidReportDataError(
-                "No valid durations in 15-minute intervals."
+                f"No valid durations in {interval}-minute intervals."
             )
 
         if min_break > max_break:
             raise InvalidReportDataError(
-                "No valid breaks in 15-minute intervals."
+                f"No valid breaks in {interval}-minute intervals."
             )
 
-        for _ in range(500):
+        for _ in range(max_attempts):
 
             start = rng.randrange(
                 min_start,
@@ -487,7 +481,7 @@ class TypeATransformationStrategy(BaseTransformationStrategy):
             }
 
         raise InvalidReportDataError(
-            "Could not generate a valid 15-minute shift."
+            f"Could not generate a valid {interval}-minute shift."
         )
 
     # ---------------------------------------------------------
@@ -563,7 +557,10 @@ class TypeATransformationStrategy(BaseTransformationStrategy):
     def _validate_result(
         self,
         report: AttendanceReport,
+        settings: dict[str, Any],
     ) -> None:
+
+        tolerance = settings["rounding_tolerance"]
 
         if not report.rows:
             raise InvalidReportDataError(
@@ -603,7 +600,7 @@ class TypeATransformationStrategy(BaseTransformationStrategy):
                     f"Invalid shift on {row.date}."
                 )
 
-            if abs(calculated_hours - row.total_hours) > 0.01:
+            if abs(calculated_hours - row.total_hours) > tolerance:
                 raise InvalidReportDataError(
                     f"Time calculation mismatch on {row.date}."
                 )
@@ -615,7 +612,7 @@ class TypeATransformationStrategy(BaseTransformationStrategy):
                 + row.saturday_hours
             )
 
-            if abs(parts - row.total_hours) > 0.01:
+            if abs(parts - row.total_hours) > tolerance:
                 raise InvalidReportDataError(
                     f"Overtime calculation mismatch on {row.date}."
                 )
@@ -634,7 +631,7 @@ class TypeATransformationStrategy(BaseTransformationStrategy):
 
         if abs(
             actual_hours - summary.total_monthly_hours
-        ) > 0.01:
+        ) > tolerance:
             raise InvalidReportDataError(
                 "Monthly total does not match attendance rows."
             )

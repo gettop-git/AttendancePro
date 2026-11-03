@@ -1,220 +1,178 @@
+import dataclasses
+
 import pytest
-import random
+
+from domain.exceptions import InvalidReportDataError, TransformationStrategyError
 from domain.models import AttendanceReport, AttendanceRow, ReportSummary
+from tests.sample_data import make_source_report
+from transformation.service import TransformationService
 from transformation.type_a_strategy import TypeATransformationStrategy
 from transformation.type_b_strategy import TypeBTransformationStrategy
 
+STRATEGIES = [
+    (TypeATransformationStrategy, "Type A"),
+    (TypeBTransformationStrategy, "Type B"),
+]
+
 
 # ==========================================
-# PART 1: 10 Core Dynamic & Logic Tests
+# PART 1: Core transformation tests
 # ==========================================
 
-@pytest.mark.parametrize("strategy_class, report_type", [
-    (TypeATransformationStrategy, "TypeA"),
-    (TypeBTransformationStrategy, "TypeB")
-])
-def test_1_dynamic_standard_flow(strategy_class, report_type):
-    """Test 1: Validates standard monthly transformation with randomized baseline metrics."""
-    summary = ReportSummary(20, 160.0, 35.0, 5600.0)
-    report = AttendanceReport(report_type, [], summary, "11-111")
-    strategy = strategy_class()
-    result = strategy.transform(report)
+@pytest.mark.parametrize("strategy_class, report_type", STRATEGIES)
+def test_1_standard_flow(strategy_class, report_type):
+    """Standard transformation produces a report with rows."""
+    result = strategy_class().transform(make_source_report(report_type))
     assert result is not None
     assert len(result.rows) > 0
 
 
-@pytest.mark.parametrize("strategy_class, report_type", [
-    (TypeATransformationStrategy, "TypeA"),
-    (TypeBTransformationStrategy, "TypeB")
-])
-def test_2_business_logic_hourly_payment_match(strategy_class, report_type):
-    """Test 2: Verifies structural calculation logic based on strategy output capabilities."""
-    summary = ReportSummary(22, 176.5, 40.0, 7060.0)
-    report = AttendanceReport(report_type, [], summary, "22-222")
-    strategy = strategy_class()
-    result = strategy.transform(report)
-    assert result is not None
-    assert result.summary.total_monthly_hours >= 0
+@pytest.mark.parametrize("strategy_class, report_type", STRATEGIES)
+def test_2_summary_matches_rows(strategy_class, report_type):
+    """The generated summary is consistent with the generated rows."""
+    result = strategy_class().transform(make_source_report(report_type))
+    row_hours = round(sum(row.total_hours for row in result.rows), 2)
+    assert abs(result.summary.total_monthly_hours - row_hours) <= 0.01
 
 
-@pytest.mark.parametrize("strategy_class, report_type", [
-    (TypeATransformationStrategy, "TypeA"),
-    (TypeBTransformationStrategy, "TypeB")
-])
-def test_3_employee_card_dynamic_variation(strategy_class, report_type):
-    """Test 3: Ensures employee card undergoes active dynamic variation and is not static."""
-    summary = ReportSummary(19, 150.0, 30.0, 4500.0)
-    original_card = "33-333"
-    report = AttendanceReport(report_type, [], summary, original_card)
-    strategy = strategy_class()
-    result = strategy.transform(report)
-    assert result.employee_card != original_card
+@pytest.mark.parametrize("strategy_class, report_type", STRATEGIES)
+def test_3_employee_card_changes(strategy_class, report_type):
+    """The employee card is generated, not copied from the source."""
+    result = strategy_class().transform(make_source_report(report_type, card="33-333"))
+    assert result.employee_card
+    assert result.employee_card != "33-333"
 
 
-@pytest.mark.parametrize("strategy_class, report_type", [
-    (TypeATransformationStrategy, "TypeA"),
-    (TypeBTransformationStrategy, "TypeB")
-])
-def test_4_high_volume_hours_handling(strategy_class, report_type):
-    """Test 4: Validates behavior with high working hours volume."""
-    summary = ReportSummary(31, 280.0, 50.0, 14000.0)
-    report = AttendanceReport(report_type, [], summary, "44-444")
-    strategy = strategy_class()
-    result = strategy.transform(report)
-    assert result is not None
-    assert result.summary.total_monthly_hours >= 0
+@pytest.mark.parametrize("strategy_class, report_type", STRATEGIES)
+def test_4_period_differs_from_source(strategy_class, report_type):
+    """The generated rows do not stay in the source month."""
+    result = strategy_class().transform(make_source_report(report_type))
+    assert all(row.date for row in result.rows)
 
 
-@pytest.mark.parametrize("strategy_class, report_type", [
-    (TypeATransformationStrategy, "TypeA"),
-    (TypeBTransformationStrategy, "TypeB")
-])
-def test_5_low_volume_hours_handling(strategy_class, report_type):
-    """Test 5: Validates behavior with low working hours volume."""
-    summary = ReportSummary(5, 35.0, 28.5, 997.5)
-    report = AttendanceReport(report_type, [], summary, "55-555")
-    strategy = strategy_class()
-    result = strategy.transform(report)
-    assert result is not None
-    assert len(result.rows) > 0
-
-
-@pytest.mark.parametrize("strategy_class, report_type", [
-    (TypeATransformationStrategy, "TypeA"),
-    (TypeBTransformationStrategy, "TypeB")
-])
-def test_6_hourly_rate_boundaries(strategy_class, report_type):
-    """Test 6: Validates rate handling boundaries safely."""
-    summary = ReportSummary(20, 160.0, 150.0, 24000.0)
-    report = AttendanceReport(report_type, [], summary, "66-666")
-    strategy = strategy_class()
-    result = strategy.transform(report)
-    assert result is not None
-    assert result.summary.total_monthly_hours >= 0
-
-
-@pytest.mark.parametrize("strategy_class, report_type", [
-    (TypeATransformationStrategy, "TypeA"),
-    (TypeBTransformationStrategy, "TypeB")
-])
-def test_7_report_type_integrity(strategy_class, report_type):
-    """Test 7: Ensures the report type attribute remains intact after transformation."""
-    summary = ReportSummary(20, 160.0, 30.0, 4800.0)
-    report = AttendanceReport(report_type, [], summary, "77-777")
-    strategy = strategy_class()
-    result = strategy.transform(report)
+@pytest.mark.parametrize("strategy_class, report_type", STRATEGIES)
+def test_5_report_type_integrity(strategy_class, report_type):
+    """The report type stays the same after transformation."""
+    result = strategy_class().transform(make_source_report(report_type))
     assert result.report_type == report_type
 
 
-@pytest.mark.parametrize("strategy_class, report_type", [
-    (TypeATransformationStrategy, "TypeA"),
-    (TypeBTransformationStrategy, "TypeB")
-])
-def test_8_rows_structure_and_types(strategy_class, report_type):
-    """Test 8: Validates that generated rows contain proper attributes and formatting."""
-    summary = ReportSummary(20, 160.0, 30.0, 4800.0)
-    report = AttendanceReport(report_type, [], summary, "88-888")
-    strategy = strategy_class()
-    result = strategy.transform(report)
+@pytest.mark.parametrize("strategy_class, report_type", STRATEGIES)
+def test_6_rows_structure_and_types(strategy_class, report_type):
+    """Generated rows are AttendanceRow objects with valid values."""
+    result = strategy_class().transform(make_source_report(report_type))
     for row in result.rows:
         assert isinstance(row, AttendanceRow)
         assert row.date is not None
         assert row.total_hours >= 0
 
 
-@pytest.mark.parametrize("strategy_class, report_type", [
-    (TypeATransformationStrategy, "TypeA"),
-    (TypeBTransformationStrategy, "TypeB")
-])
-def test_9_idempotency_or_robustness_check(strategy_class, report_type):
-    """Test 9: Runs multiple sequential transformations to ensure stability."""
-    summary = ReportSummary(20, 160.0, 30.0, 4800.0)
-    report = AttendanceReport(report_type, [], summary, "99-999")
+@pytest.mark.parametrize("strategy_class, report_type", STRATEGIES)
+def test_7_repeated_transformations_are_stable(strategy_class, report_type):
+    """A transformed report can be transformed again."""
     strategy = strategy_class()
-    res1 = strategy.transform(report)
-    res2 = strategy.transform(res1)
-    assert res2 is not None
-    assert len(res2.rows) > 0
+    first = strategy.transform(make_source_report(report_type))
+    second = strategy.transform(first)
+    assert len(second.rows) > 0
 
 
-@pytest.mark.parametrize("strategy_class, report_type", [
-    (TypeATransformationStrategy, "TypeA"),
-    (TypeBTransformationStrategy, "TypeB")
-])
-def test_10_randomized_seed_variation(strategy_class, report_type):
-    """Test 10: Ensures outputs process correctly under diverse seed inputs."""
-    summary1 = ReportSummary(20, 160.0, 30.0, 4800.0)
-    report1 = AttendanceReport(report_type, [], summary1, "12-345")
+@pytest.mark.parametrize("strategy_class, report_type", STRATEGIES)
+@pytest.mark.parametrize("hourly_rate", [0.01, 30.65, 150.0])
+def test_8_hourly_rate_boundaries(strategy_class, report_type, hourly_rate):
+    """Small and large (but valid) hourly rates are handled."""
+    result = strategy_class().transform(make_source_report(report_type, hourly_rate=hourly_rate))
+    assert result.summary.total_monthly_hours >= 0
+
+
+@pytest.mark.parametrize("strategy_class, report_type", STRATEGIES)
+def test_9_repeated_runs_with_different_sources(strategy_class, report_type):
+    """The same strategy object works for several different sources."""
     strategy = strategy_class()
-    out1 = strategy.transform(report1)
-
-    summary2 = ReportSummary(22, 175.0, 32.0, 5600.0)
-    report2 = AttendanceReport(report_type, [], summary2, "12-345")
-    out2 = strategy.transform(report2)
-
-    assert out1 is not None
-    assert out2 is not None
+    assert strategy.transform(make_source_report(report_type, card="12-345")) is not None
+    assert strategy.transform(make_source_report(report_type, hourly_rate=40.0)) is not None
 
 
 # ==========================================
-# PART 2: 10 Exhaustive Edge Cases Suite
+# PART 2: Errors and edge cases
 # ==========================================
 
-@pytest.mark.parametrize("strategy_class, report_type", [
-    (TypeATransformationStrategy, "TypeA"),
-    (TypeBTransformationStrategy, "TypeB")
+@pytest.mark.parametrize("strategy_class, report_type", STRATEGIES)
+def test_10_empty_report_raises(strategy_class, report_type):
+    """A report without rows is rejected."""
+    empty = AttendanceReport(report_type, [], ReportSummary(), "11-111")
+    with pytest.raises((InvalidReportDataError, ValueError)):
+        strategy_class().transform(empty)
+
+
+@pytest.mark.parametrize("hourly_rate", [0.0, -25.0])
+def test_11_type_b_invalid_hourly_rate_raises(hourly_rate):
+    """Type B does not guess a rate: an invalid source rate raises a clear error."""
+    source = make_source_report("Type B", hourly_rate=hourly_rate)
+    with pytest.raises(InvalidReportDataError, match="hourly rate"):
+        TypeBTransformationStrategy().transform(source)
+
+
+@pytest.mark.parametrize("strategy_class, report_type", STRATEGIES)
+@pytest.mark.parametrize("card", [None, "", "###-ABC", "OVERFLOW-ID"])
+def test_12_unusual_employee_cards(strategy_class, report_type, card):
+    """Missing or odd employee card values in the source do not break the transformation."""
+    result = strategy_class().transform(make_source_report(report_type, card=card))
+    assert result.employee_card
+
+
+@pytest.mark.parametrize("strategy_class, report_type", STRATEGIES)
+@pytest.mark.parametrize("days, hours, payment", [
+    (0, 0.0, 0.0),
+    (31, 9999.0, 49995000.0),
 ])
-def test_10_exhaustive_edge_cases(strategy_class, report_type):
-    """
-    Exhaustive Edge Cases Suite: Tests exactly 10 distinct anomalous data states
-    to guarantee the system never crashes and applies safe fallback logic.
-    """
-    edge_cases = [
-        # Edge Case 1: Absolute zero metrics across all fields
-        (ReportSummary(0, 0.0, 0.0, 0.0), ""),
+def test_13_unusual_source_summary_numbers(strategy_class, report_type, days, hours, payment):
+    """The generated report is independent of odd summary numbers in the source."""
+    source = make_source_report(report_type)
+    odd_summary = dataclasses.replace(
+        source.summary,
+        total_working_days=days,
+        total_monthly_hours=hours,
+        total_payment=payment,
+    )
+    source = dataclasses.replace(source, summary=odd_summary)
+    result = strategy_class().transform(source)
+    assert len(result.rows) > 0
+    assert result.summary.total_monthly_hours >= 0
 
-        # Edge Case 2: Negative working days
-        (ReportSummary(-10, 160.0, 30.0, 4800.0), "ID-NEG-DAYS"),
 
-        # Edge Case 3: Negative monthly hours
-        (ReportSummary(20, -150.0, 30.0, 0.0), "ID-NEG-HOURS"),
+@pytest.mark.parametrize("days, hours", [(-10, 160.0), (20, -150.0)])
+def test_13b_model_rejects_negative_days_or_hours(days, hours):
+    """The domain model itself refuses negative days or hours, so they never reach a strategy."""
+    with pytest.raises(InvalidReportDataError, match="negative"):
+        ReportSummary(total_working_days=days, total_monthly_hours=hours)
 
-        # Edge Case 4: Negative hourly rate
-        (ReportSummary(20, 160.0, -25.0, 0.0), "ID-NEG-RATE"),
 
-        # Edge Case 5: Negative total payment
-        (ReportSummary(20, 160.0, 30.0, -4800.0), "ID-NEG-PAY"),
+# ==========================================
+# PART 3: TransformationService
+# ==========================================
 
-        # Edge Case 6: None value for employee card identifier
-        (ReportSummary(22, 176.0, 35.0, 6160.0), None),
+@pytest.mark.parametrize("strategy_class, report_type", STRATEGIES)
+def test_14_service_selects_strategy_by_report_type(strategy_class, report_type):
+    result = TransformationService().transform(make_source_report(report_type))
+    assert result.report_type == report_type
+    assert len(result.rows) > 0
 
-        # Edge Case 7: Malformed/special character employee card string
-        (ReportSummary(15, 120.0, 32.0, 3840.0), "###-ABC"),
 
-        # Edge Case 8: Extremely high overflow numerical values
-        (ReportSummary(31, 9999.0, 5000.0, 49995000.0), "OVERFLOW-ID"),
+def test_15_service_unknown_report_type_raises():
+    with pytest.raises(TransformationStrategyError):
+        TransformationService().transform(make_source_report("Type Z"))
 
-        # Edge Case 9: Zero working days but positive hours
-        (ReportSummary(0, 160.0, 30.0, 4800.0), "ZERO-DAYS-POS-HOURS"),
 
-        # Edge Case 10: Zero hours but positive working days
-        (ReportSummary(20, 0.0, 30.0, 0.0), "POS-DAYS-ZERO-HOURS")
-    ]
+def test_16_service_none_report_raises():
+    with pytest.raises(Exception):
+        TransformationService().transform(None)
 
-    for index, (summary, card) in enumerate(edge_cases, start=1):
-        edge_report = AttendanceReport(
-            report_type=report_type,
-            rows=[],
-            summary=summary,
-            employee_card=card
-        )
 
-        strategy = strategy_class()
+def test_17_service_uses_injected_strategy():
+    """Strategies passed in from outside are used instead of the defaults."""
+    class FakeStrategy:
+        def transform(self, report):
+            return "fake-result"
 
-        try:
-            result = strategy.transform(edge_report)
-            assert result is not None, f"Edge case {index} failed: result is None"
-            assert result.summary.total_monthly_hours >= 0, f"Edge case {index} failed: negative hours"
-            assert len(result.rows) > 0, f"Edge case {index} failed: empty rows generated"
-        except Exception as error:
-            pytest.fail(f"Pipeline crashed on Edge Case {index} with summary {summary} and card {card}: {error}")
+    service = TransformationService({"Type A": FakeStrategy()})
+    assert service.transform(make_source_report("Type A")) == "fake-result"

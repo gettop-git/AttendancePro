@@ -7,6 +7,12 @@
     "duration_tolerance_minutes": 30,
     "break_tolerance_minutes": 0,
     "default_break_duration": "00:30",
-    "year_range": 3
+    "year_range": 3,
+    "time_interval_minutes": 15,
+    "max_generation_attempts": 500,
+    "hourly_rate_variation_percent": 10,
+    "vacation_days_min": 3,
+    "vacation_days_max": 4,
+    "rounding_tolerance": 0.01
   }
 }

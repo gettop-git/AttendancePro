@@ -1,6 +1,8 @@
 import logging
+from typing import Dict, Optional
 from domain.models import AttendanceReport
 from domain.exceptions import AttendanceSystemError, TransformationStrategyError
+from transformation.base_strategy import BaseTransformationStrategy
 from transformation.type_a_strategy import TypeATransformationStrategy
 from transformation.type_b_strategy import TypeBTransformationStrategy
 
@@ -15,15 +17,18 @@ class TransformationService:
     while ensuring structured logging and robust error handling.
     """
 
-    def __init__(self) -> None:
+    def __init__(
+        self, strategies: Optional[Dict[str, BaseTransformationStrategy]] = None
+    ) -> None:
         """
-        Initializes the service by registering the available transformation strategies.
+        Initializes the service with the given strategies (keyed by report type).
+        If none are provided, the default Type A and Type B strategies are used.
         """
-        self._strategies = {
+        self._strategies = strategies or {
             "Type A": TypeATransformationStrategy(),
             "Type B": TypeBTransformationStrategy(),
         }
-        logger.debug("TransformationService initialized with Type A and Type B strategies.")
+        logger.debug(f"TransformationService initialized with strategies: {list(self._strategies)}")
 
     def transform(self, report: AttendanceReport) -> AttendanceReport:
         """

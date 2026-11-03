@@ -1,4 +1,5 @@
-from typing import Dict, Type
+from typing import Callable, Dict, Optional, Type
+from pathlib import Path
 import logging
 from parsers.base_parser import BaseParser
 from parsers.type_a_parser import TypeAParser
@@ -23,11 +24,17 @@ class ParserFactory:
     }
 
     @classmethod
-    def get_parser(cls, file_type: str) -> BaseParser:
+    def get_parser(
+        cls,
+        file_type: str,
+        ocr_extractor: Optional[Callable[[Path], str]] = None,
+    ) -> BaseParser:
         """
         Retrieves and instantiates the appropriate parser instance based on the given file type safely.
 
         :param file_type: String identifier representing the file format (e.g., 'type_a', 'type_b').
+        :param ocr_extractor: Optional function that turns a PDF path into text. If omitted,
+            the parser uses its default OCR extractor.
         :return: An instance inheriting from BaseParser.
         :raises ValueError: If the requested parser type is not supported in the registry.
         """
@@ -47,6 +54,8 @@ class ParserFactory:
                 raise ValueError(error_msg)
 
             logger.debug(f"Successfully instantiated parser for type: {normalized_type}")
+            if ocr_extractor is not None:
+                return parser_cls(ocr_extractor=ocr_extractor)
             return parser_cls()
 
         except (ValueError, AttendanceSystemError):

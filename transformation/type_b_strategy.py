@@ -1,30 +1,18 @@
-
 import calendar
 import logging
 import random
 from datetime import date, datetime, timedelta
 from typing import Any, Dict, List, Tuple
 
+from domain.exceptions import InvalidReportDataError
 from domain.models import AttendanceReport, AttendanceRow, ReportSummary
 from transformation.base_strategy import BaseTransformationStrategy
+from config import DEFAULT_CONFIG
 
 logger = logging.getLogger(__name__)
 
 
 class TypeBTransformationStrategy(BaseTransformationStrategy):
-
-    DEFAULT_SETTINGS = {
-        "min_working_days": 10,
-        "max_working_days": 22,
-        "start_tolerance_minutes": 15,
-        "end_tolerance_minutes": 30,
-        "duration_tolerance_minutes": 30,
-        "time_interval_minutes": 15,
-        "year_range": 3,
-        "default_hourly_rate": 30.65,
-        "hourly_rate_variation_percent": 10,
-        "vacation_probability": 0.15,
-    }
 
     def transform(self, report: AttendanceReport) -> AttendanceReport:
         if report is None or not report.rows:
@@ -61,7 +49,7 @@ class TypeBTransformationStrategy(BaseTransformationStrategy):
         else:
             configured = {}
 
-        settings = self.DEFAULT_SETTINGS.copy()
+        settings = dict(DEFAULT_CONFIG["synthetic_data"])
         settings.update(configured or {})
 
         return settings
@@ -70,6 +58,7 @@ class TypeBTransformationStrategy(BaseTransformationStrategy):
         valid_rows = [
             row for row in report.rows
             if row.clock_in and row.clock_out
+            and row.clock_in != "-" and row.clock_out != "-"
         ]
 
         if not valid_rows:
@@ -154,6 +143,7 @@ class TypeBTransformationStrategy(BaseTransformationStrategy):
                 except ValueError:
                     continue
 
+        logger.warning("Could not read the source period from the report title or row dates.")
         return None
 
     def _generate_rows(self, year: int, month: int) -> List[AttendanceRow]:
@@ -166,9 +156,12 @@ class TypeBTransformationStrategy(BaseTransformationStrategy):
             if date(year, month, day).weekday() != 5
         ]
 
-        # Choose only 3 or 4 additional vacation days.
+        # Choose a random number of vacation days within the configured range.
         vacation_days_count = min(
-            random.randint(3, 4),
+            random.randint(
+                int(self.settings["vacation_days_min"]),
+                int(self.settings["vacation_days_max"]),
+            ),
             max(0, len(possible_working_days) - 1)
         )
 
@@ -302,13 +295,12 @@ class TypeBTransformationStrategy(BaseTransformationStrategy):
             2
         )
 
-        source_rate = 0.0
+        if source_report.summary is None or source_report.summary.hourly_rate <= 0:
+            raise InvalidReportDataError(
+                "The source report has no valid hourly rate; cannot generate a Type B report."
+            )
 
-        if source_report.summary:
-            source_rate = source_report.summary.hourly_rate
-
-        if source_rate <= 0:
-            source_rate = self.settings["default_hourly_rate"]
+        source_rate = source_report.summary.hourly_rate
 
         variation = self.settings["hourly_rate_variation_percent"] / 100
 
@@ -391,7 +383,7 @@ class TypeBTransformationStrategy(BaseTransformationStrategy):
 
             calculated_hours = round((end - start) / 60, 2)
 
-            if abs(calculated_hours - row.total_hours) > 0.01:
+            if abs(calculated_hours - row.total_hours) > self.settings["rounding_tolerance"]:
                 raise ValueError("Incorrect total hours in row.")
 
             working_days += 1
@@ -409,7 +401,7 @@ class TypeBTransformationStrategy(BaseTransformationStrategy):
             2
         )
 
-        if abs(expected_payment - report.summary.total_payment) > 0.01:
+        if abs(expected_payment - report.summary.total_payment) > self.settings["rounding_tolerance"]:
             raise ValueError("Incorrect total payment.")
 
     @staticmethod

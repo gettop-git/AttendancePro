@@ -1,27 +1,27 @@
-# Use an official Python runtime as a parent image
-FROM python:3.14-slim
+FROM python:3.12-slim
 
-# Set the working directory inside the container
 WORKDIR /app
 
-# Prevent Python from writing pyc files and buffer stdout/stderr
 ENV PYTHONDONTWRITEBYTECODE=1
 ENV PYTHONUNBUFFERED=1
+ENV PYTHONPATH=/app
 
-# Install system dependencies if needed
+# System programs the Python libraries rely on:
+# - tesseract-ocr: used by pytesseract (OCR)
+# - poppler-utils: used by pdf2image (PDF -> images)
+# - build tools / cairo: needed to install xhtml2pdf dependencies
 RUN apt-get update && apt-get install -y --no-install-recommends \
     build-essential \
+    pkg-config \
+    libcairo2-dev \
+    tesseract-ocr \
+    poppler-utils \
     && rm -rf /var/lib/apt/lists/*
 
-# Copy requirements file and install dependencies
 COPY requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt
 
-# Copy the rest of the project code into the container
 COPY . .
 
-# Set PYTHONPATH to ensure correct module imports
-ENV PYTHONPATH=/app
-
-# Default command to run tests or application
+# Default: run the tests. Override the command to process a PDF.
 CMD ["pytest", "-v"]

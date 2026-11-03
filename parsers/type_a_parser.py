@@ -77,17 +77,20 @@ class TypeAParser(BaseParser):
                     data = match.groupdict()
                     logger.debug("Type A summary successfully parsed.")
                     return ReportSummary(
-                        total_working_days=int(data.get("total_working_days", 0)),
-                        total_monthly_hours=float(data.get("total_monthly_hours", 0.0)),
-                        total_100_hours=float(data.get("total_100_hours", 0.0)),
-                        total_125_hours=float(data.get("total_125_hours", 0.0)),
-                        total_150_hours=float(data.get("total_150_hours", 0.0)),
-                        bonus=float(data.get("bonus", 0.0)),
-                        travel=float(data.get("travel", 0.0))
+                        total_working_days=int(data["total_working_days"]),
+                        total_monthly_hours=float(data["total_monthly_hours"]),
+                        total_100_hours=float(data["total_100_hours"]),
+                        total_125_hours=float(data["total_125_hours"]),
+                        total_150_hours=float(data["total_150_hours"]),
+                        bonus=float(data["bonus"]),
+                        travel=float(data["travel"])
                     )
 
-            logger.warning("Type A summary pattern not found in lines; returning default empty summary.")
-            return ReportSummary()
+            raise InvalidReportDataError(
+                "The summary line (Total Days / Total Hours / ... / Travel) was not found in the report."
+            )
+        except InvalidReportDataError:
+            raise
         except Exception as e:
             logger.error(f"Error occurred while parsing Type A summary: {e}", exc_info=True)
             raise InvalidReportDataError(f"Failed to parse Type A summary: {e}") from e

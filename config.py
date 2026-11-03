@@ -1,4 +1,3 @@
-
 import json
 import logging
 from pathlib import Path
@@ -7,10 +6,29 @@ from typing import Any
 logger = logging.getLogger(__name__)
 
 
+# Single source of defaults. config.json overrides any of these values.
 DEFAULT_CONFIG = {
     "synthetic_data": {
         "enabled": True,
+        # Working days and period
+        "min_working_days": 10,
+        "max_working_days": 22,
+        "year_range": 3,
+        # Shift generation
+        "start_tolerance_minutes": 15,
+        "end_tolerance_minutes": 30,
+        "duration_tolerance_minutes": 30,
+        "break_tolerance_minutes": 0,
         "default_break_duration": "00:30",
+        "time_interval_minutes": 15,
+        "max_generation_attempts": 500,
+        # Type B: pay and vacation days
+        "default_hourly_rate": 30.65,
+        "hourly_rate_variation_percent": 10,
+        "vacation_days_min": 3,
+        "vacation_days_max": 4,
+        # Validation
+        "rounding_tolerance": 0.01,
     }
 }
 

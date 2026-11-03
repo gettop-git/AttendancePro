@@ -49,7 +49,9 @@ class BaseParser(ABC):
             # Parse summary using subclass implementation
             summary = self._parse_summary(lines)
             if summary is None:
-                logger.warning(f"Summary could not be parsed or returned None for file: {file_path}")
+                raise InvalidReportDataError(
+                    f"The report summary could not be read from '{file_path.name}'."
+                )
 
             # Iterate through lines, filtering headers and noise, and parse rows
             rows: List[AttendanceRow] = []
@@ -63,6 +65,12 @@ class BaseParser(ABC):
                 except Exception as row_err:
                     logger.warning(f"Failed to parse line {line_idx} ('{line}'): {row_err}")
 
+            if not rows:
+                raise InvalidReportDataError(
+                    f"No attendance rows were found in '{file_path.name}'. "
+                    "The file may not be a valid attendance report."
+                )
+
             logger.info(f"Successfully completed parsing for file: {file_path}. Extracted {len(rows)} valid rows.")
             return AttendanceReport(
                 report_type=self.report_type,
@@ -70,7 +78,7 @@ class BaseParser(ABC):
                 summary=summary
             )
 
-        except FileNotFoundError:
+        except (FileNotFoundError, InvalidReportDataError):
             raise
         except Exception as e:
             logger.error(f"Critical error during parsing file {file_path}: {e}", exc_info=True)

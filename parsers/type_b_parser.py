@@ -69,7 +69,7 @@ class TypeBParser(BaseParser):
             logger.info("Type B parsing and metadata extraction completed successfully.")
             return report
 
-        except FileNotFoundError:
+        except (FileNotFoundError, InvalidReportDataError):
             raise
         except Exception as e:
             logger.error(f"Critical error during Type B parsing for file {file_path}: {e}", exc_info=True)
@@ -106,47 +106,42 @@ class TypeBParser(BaseParser):
 
     def _parse_summary(self, lines: List[str]) -> Optional[ReportSummary]:
         """
-        Parses top-summary fields for Type B reports (Total Working Days, Total Monthly Hours, Hourly Rate, Total Payment) safely.
-        """
-        try:
-            total_days = 0
-            monthly_hours = 0.0
-            hourly_rate = 0.0
-            total_payment = 0.0
+        Parses the top-summary fields of a Type B report.
 
-            # Scan lines to extract summary values robustly based on preceding labels
+        Every field is required. A missing or unreadable value raises
+        InvalidReportDataError: no defaults and no guessing.
+        """
+        fields = {
+            "total working days": ("total_working_days", int),
+            "total monthly hours": ("total_monthly_hours", float),
+            "hourly rate": ("hourly_rate", float),
+            "total payment": ("total_payment", float),
+        }
+        try:
+            values = {}
             for idx, line in enumerate(lines):
                 line_lower = line.lower()
-                if "total working days" in line_lower and idx + 1 < len(lines):
+                for label, (name, convert) in fields.items():
+                    if label not in line_lower or idx + 1 >= len(lines):
+                        continue
+                    raw_value = lines[idx + 1].strip()
                     try:
-                        total_days = int(lines[idx + 1].strip())
+                        values[name] = convert(raw_value.replace("\u25a0", "").replace(",", ""))
                     except ValueError:
-                        pass
-                if "total monthly hours" in line_lower and idx + 1 < len(lines):
-                    try:
-                        monthly_hours = float(lines[idx + 1].strip())
-                    except ValueError:
-                        pass
-                if "hourly rate" in line_lower and idx + 1 < len(lines):
-                    try:
-                        rate_str = lines[idx + 1].strip().replace("■", "").replace(",", "")
-                        hourly_rate = float(rate_str)
-                    except ValueError:
-                        pass
-                if "total payment" in line_lower and idx + 1 < len(lines):
-                    try:
-                        pay_str = lines[idx + 1].strip().replace("■", "").replace(",", "")
-                        total_payment = float(pay_str)
-                    except ValueError:
-                        pass
+                        raise InvalidReportDataError(
+                            f"Could not read '{label}' from the value {raw_value!r}."
+                        ) from None
+
+            missing = [label for label, (name, _) in fields.items() if name not in values]
+            if missing:
+                raise InvalidReportDataError(
+                    f"Missing summary values in the report: {', '.join(missing)}."
+                )
 
             logger.debug("Type B summary successfully parsed.")
-            return ReportSummary(
-                total_working_days=total_days,
-                total_monthly_hours=monthly_hours,
-                hourly_rate=hourly_rate,
-                total_payment=total_payment
-            )
+            return ReportSummary(**values)
+        except InvalidReportDataError:
+            raise
         except Exception as e:
             logger.error(f"Error occurred while parsing Type B summary: {e}", exc_info=True)
             raise InvalidReportDataError(f"Failed to parse Type B summary: {e}") from e

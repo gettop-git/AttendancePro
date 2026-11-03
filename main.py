@@ -1,99 +1,124 @@
-from pathlib import Path
-import sys
 import logging
+import sys
+from pathlib import Path
 
 from parsers.classifier import DocumentClassifier
 from parsers.factory import ParserFactory
+from parsers.ocr import extract_text_from_pdf
+from config import config
 from transformation.service import TransformationService
+from transformation.type_a_strategy import TypeATransformationStrategy
+from transformation.type_b_strategy import TypeBTransformationStrategy
 from generators.html_renderer import HtmlRenderer
 from generators.pdf_renderer import PdfRenderer
 from domain.exceptions import AttendanceSystemError, InvalidReportDataError
 
-# Configure root logger for the main pipeline execution
-logging.basicConfig(
-    level=logging.INFO,
-    format="%(asctime)s - %(name)s - %(levelname)s - %(message)s"
-)
 logger = logging.getLogger(__name__)
 
+DEFAULT_INPUT = "input_pdfs/sample_report.pdf"
+DEFAULT_OUTPUT_DIR = "output"
 
-def process_attendance_report(input_pdf_path: str, output_dir: str, use_pdf_output: bool = False) -> None:
+
+def setup_logging(verbose: bool = False) -> None:
     """
-    Main pipeline function:
-    1. Classifies the input PDF (Type A or Type B).
-    2. Instantiates the correct parser using ParserFactory and parses the file into an AttendanceReport model.
-    3. Transforms the report data deterministically using TransformationService.
-    4. Renders the final transformed report into HTML or PDF format.
+    Configure logging. Called only when the program is actually run.
+
+    By default the technical log is hidden (the user sees the short messages
+    printed by _notify). With verbose=True the full technical log is shown.
     """
+    logging.basicConfig(
+        level=logging.INFO if verbose else logging.CRITICAL,
+        format="%(asctime)s - %(name)s - %(levelname)s - %(message)s",
+    )
+
+
+def _notify(message: str, level: str = "INFO") -> None:
+    """Single place for reporting progress: log it and show it to the user."""
+    logger.log(getattr(logging, level), message)
+    print(f"[{level}] {message}")
+
+
+def validate_input(input_pdf_path: str) -> Path:
+    path = Path(input_pdf_path)
+    if not path.exists():
+        raise FileNotFoundError(f"Input file not found at: {path}")
+    return path
+
+
+def classify(path: Path) -> str:
+    doc_type = DocumentClassifier.classify(path)
+    _notify(f"Document classified as: {doc_type}")
+    return doc_type
+
+
+def parse(path: Path, doc_type: str):
+    parser = ParserFactory.get_parser(doc_type, ocr_extractor=extract_text_from_pdf)
+    report = parser.parse(path)
+    _notify(f"Parsed {len(report.rows)} attendance rows.")
+    return report
+
+
+def build_transformation_service() -> TransformationService:
+    """Create the strategies here and hand them to the service."""
+    return TransformationService(
+        {
+            "Type A": TypeATransformationStrategy(config),
+            "Type B": TypeBTransformationStrategy(config),
+        }
+    )
+
+
+def transform(report):
+    transformed = build_transformation_service().transform(report)
+    _notify("Report transformed.")
+    return transformed
+
+
+def get_renderer(use_pdf: bool):
+    return PdfRenderer() if use_pdf else HtmlRenderer()
+
+
+def build_output_path(input_path: Path, output_dir: str, use_pdf: bool) -> Path:
+    directory = Path(output_dir)
+    directory.mkdir(parents=True, exist_ok=True)
+    extension = "pdf" if use_pdf else "html"
+    return directory / f"{input_path.stem}_transformed.{extension}"
+
+
+def build_report(input_pdf_path: str):
+    """Validate -> classify -> parse -> transform. Returns the transformed report."""
+    path = validate_input(input_pdf_path)
+    _notify(f"Processing file: {path.name}")
+
+    doc_type = classify(path)
+    report = parse(path, doc_type)
+    return transform(report)
+
+
+def process_attendance_report(
+    input_pdf_path: str, output_dir: str, use_pdf_output: bool = False
+) -> None:
+    """Full pipeline: build the report, then render it to HTML or PDF."""
     try:
-        input_path = Path(input_pdf_path)
-        output_directory = Path(output_dir)
-        output_directory.mkdir(parents=True, exist_ok=True)
+        report = build_report(input_pdf_path)
 
-        logger.info(f"Starting attendance report pipeline for: {input_path}")
-        print(f"[INFO] Processing file: {input_path.name}...")
+        output_path = build_output_path(Path(input_pdf_path), output_dir, use_pdf_output)
+        get_renderer(use_pdf_output).render(report, str(output_path))
+        _notify(f"Output generated at: {output_path}")
 
-        if not input_path.exists():
-            error_msg = f"Input file not found at: {input_path}"
-            logger.error(error_msg)
-            raise FileNotFoundError(error_msg)
-
-        # Step 1: Classify document type ('type_a' or 'type_b')
-        logger.info("Executing Step 1: Document classification.")
-        doc_type_key = DocumentClassifier.classify(input_path)
-        print(f"[INFO] Document classified as: {doc_type_key}")
-        logger.info(f"Document successfully classified as: {doc_type_key}")
-
-        # Step 2: Get the correct parser from ParserFactory and parse raw text into AttendanceReport
-        logger.info(f"Executing Step 2: Instantiating parser for type '{doc_type_key}' and parsing report.")
-        parser = ParserFactory.get_parser(doc_type_key)
-        report = parser.parse(input_path)
-        print(f"[INFO] Successfully parsed {len(report.rows)} attendance rows.")
-        logger.info(f"Successfully parsed {len(report.rows)} rows from input file.")
-
-        # Step 3: Transform report data deterministically
-        logger.info("Executing Step 3: Transforming report data.")
-        transformation_service = TransformationService()
-        transformed_report = transformation_service.transform(report)
-        print(f"[INFO] Report successfully transformed.")
-        logger.info("Report transformation completed successfully.")
-
-        # Step 4: Render to output file (HTML or PDF)
-        file_extension = "pdf" if use_pdf_output else "html"
-        output_file_path = output_directory / f"{input_path.stem}_transformed.{file_extension}"
-
-        logger.info(f"Executing Step 4: Rendering report to {file_extension.upper()} format at {output_file_path}")
-        if use_pdf_output:
-            renderer = PdfRenderer()
-        else:
-            renderer = HtmlRenderer()
-
-        renderer.render(transformed_report, str(output_file_path))
-        print(f"[SUCCESS] Output generated successfully at: {output_file_path}\n")
-        logger.info(f"Pipeline finished successfully. Output saved to: {output_file_path}")
-
-    except (AttendanceSystemError, InvalidReportDataError, FileNotFoundError) as biz_err:
-        logger.error(f"Business logic or file error during pipeline execution: {biz_err}", exc_info=True)
-        print(f"[ERROR] Processing failed: {biz_err}")
+    except (AttendanceSystemError, InvalidReportDataError, FileNotFoundError) as err:
+        _notify(f"Processing failed: {err}", "ERROR")
         raise
-    except Exception as e:
-        logger.error(f"Unexpected critical error in pipeline execution: {e}", exc_info=True)
-        print(f"[ERROR] An unexpected error occurred: {e}")
-        raise AttendanceSystemError(f"Pipeline failed: {e}") from e
+    except Exception as err:
+        _notify(f"Unexpected error: {err}", "ERROR")
+        raise AttendanceSystemError(f"Pipeline failed: {err}") from err
 
 
 if __name__ == "__main__":
-    # Example usage execution flow
-    # Pass input file path as argument or use default paths for testing
-    if len(sys.argv) > 1:
-        target_pdf = sys.argv[1]
-    else:
-        # Default placeholder path for testing
-        target_pdf = "input_pdfs/sample_report.pdf"
-
-    output_folder = "output"
-
+    args = [a for a in sys.argv[1:] if a != "--verbose"]
+    setup_logging(verbose="--verbose" in sys.argv)
+    target_pdf = args[0] if args else DEFAULT_INPUT
     try:
-        process_attendance_report(target_pdf, output_folder, use_pdf_output=False)
-    except Exception as e:
-        print(f"[ERROR] Pipeline terminated with error.")
+        process_attendance_report(target_pdf, DEFAULT_OUTPUT_DIR)
+    except Exception:
+        sys.exit(1)

@@ -66,6 +66,15 @@ class DocumentClassifier:
 
             logger.debug(f"Classification scores computed - Type A: {score_type_a}, Type B: {score_type_b}")
 
+            # Refuse to guess: a file with no attendance-report features is not a report
+            if score_type_a == 0 and score_type_b == 0:
+                error_msg = (
+                    f"'{file_path.name}' does not look like an attendance report "
+                    "(no Type A or Type B features were found)."
+                )
+                logger.error(error_msg)
+                raise InvalidReportDataError(error_msg)
+
             # Decision making based on aggregate score comparison
             if score_type_a > score_type_b:
                 logger.info(f"File {file_path} successfully classified as 'type_a'.")
@@ -74,7 +83,7 @@ class DocumentClassifier:
                 logger.info(f"File {file_path} successfully classified as 'type_b'.")
                 return "type_b"
 
-        except FileNotFoundError:
+        except (FileNotFoundError, InvalidReportDataError):
             raise
         except Exception as e:
             logger.error(f"Critical error during document classification for {file_path}: {e}", exc_info=True)

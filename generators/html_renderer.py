@@ -56,28 +56,34 @@ class HtmlRenderer(BaseRenderer):
             logger.error(f"Error while generating HTML content layout: {e}", exc_info=True)
             raise InvalidReportDataError(f"Failed to generate HTML content layout: {e}") from e
 
+    @staticmethod
+    def _month_year(report: AttendanceReport) -> str:
+        """Returns 'Month YYYY' from the first row's date. Raises if it cannot be read (no default)."""
+        months = {
+            1: "January", 2: "February", 3: "March", 4: "April",
+            5: "May", 6: "June", 7: "July", 8: "August",
+            9: "September", 10: "October", 11: "November", 12: "December",
+        }
+        if not report.rows or not report.rows[0].date:
+            raise InvalidReportDataError("Cannot determine the report month: the first row has no date.")
+        date_text = report.rows[0].date
+        parts = date_text.split("/")
+        try:
+            if len(parts) != 3:
+                raise ValueError
+            month_name = months[int(parts[1])]
+        except (ValueError, KeyError):
+            raise InvalidReportDataError(f"Cannot read the month from the date {date_text!r}.") from None
+        year = "20" + parts[2] if len(parts[2]) == 2 else parts[2]
+        return f"{month_name} {year}"
+
     def _render_type_b(self, report: AttendanceReport) -> str:
-        # Extract month and year dynamically from the first row to update the title
-        month_year_str = "September 2022"
-        if report.rows and report.rows[0].date:
-            try:
-                parts = report.rows[0].date.split("/")
-                if len(parts) == 3:
-                    month_num = int(parts[1])
-                    year_num = "20" + parts[2] if len(parts[2]) == 2 else parts[2]
-                    months_map = {
-                        1: "January", 2: "February", 3: "March", 4: "April",
-                        5: "May", 6: "June", 7: "July", 8: "August",
-                        9: "September", 10: "October", 11: "November", 12: "December"
-                    }
-                    month_name = months_map.get(month_num, "")
-                    if month_name:
-                        month_year_str = f"{month_name} {year_num}"
-            except Exception:
-                pass
+        month_year_str = self._month_year(report)
 
         report_title = f"Employee Timesheet - {month_year_str}"
-        employee_card = report.employee_card or "22-090"
+        if not report.employee_card:
+            raise InvalidReportDataError("The report has no employee card number.")
+        employee_card = report.employee_card
         summary = report.summary
 
         summary_html = f"""
@@ -215,24 +221,7 @@ class HtmlRenderer(BaseRenderer):
     </html>"""
 
     def _render_type_a(self, report: AttendanceReport) -> str:
-        # Extract month/year dynamically from the first valid row if possible
-        month_year_str = "Timesheet"
-        if report.rows and report.rows[0].date:
-            try:
-                parts = report.rows[0].date.split("/")
-                if len(parts) == 3:
-                    month_num = int(parts[1])
-                    year_num = parts[2]
-                    months_map = {
-                        1: "January", 2: "February", 3: "March", 4: "April",
-                        5: "May", 6: "June", 7: "July", 8: "August",
-                        9: "September", 10: "October", 11: "November", 12: "December"
-                    }
-                    month_name = months_map.get(month_num, "")
-                    if month_name:
-                        month_year_str = f"{month_name} {year_num} Timesheet"
-            except Exception:
-                pass
+        month_year_str = f"{self._month_year(report)} Timesheet"
 
         report_title = f"HaNesher Manpower Ltd. - {month_year_str}"
         summary = report.summary
